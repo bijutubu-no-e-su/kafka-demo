@@ -106,5 +106,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+  ksqldb:
+    image: confluentinc/ksqldb-server:0.29.0
+    platform: linux/amd64
+    container_name: ksqldb
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - '8088:8088'
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_KSQL_SERVICE_ID: 'ksql-demo'
+      KSQL_KSQL_STREAMS_AUTO_OFFSET_RESET: earliest
+    volumes:
+      - ./ksql:/opt/ksql
 volumes:
   kafkadata:
