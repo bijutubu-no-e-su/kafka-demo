@@ -1,0 +1,22 @@
+/*
+  推奨拡張（Workspace Recommendations）
+  - ここに挙げた拡張はこのプロジェクトで便利なものです。ユーザーにインストールを促します。
+*/
+{
+  "recommendations": [
+    // Docker コンテナ / compose を扱うときに便利
+    "ms-azuretools.vscode-docker",
+    // コード整形（Prettier）
+    "esbenp.prettier-vscode",
+    // ESLint（静的解析）
+    "dbaeumer.vscode-eslint",
+    // package.json の scripts を一覧・実行できる UI
+    "eg2.vscode-npm-script",
+    // YAML のシンタックス/スキーマ補完（docker-compose, ksql 等）
+    "redhat.vscode-yaml",
+    // k8s / kubectl を扱う場合に便利
+    "ms-kubernetes-tools.vscode-kubernetes-tools",
+    // Kafka ブラウズやメッセージ確認に便利な拡張
+    "staffbase.vscode-kafka"
+  ]
+}

@@ -1,0 +1,66 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    // docker compose でサービス一式をバックグラウンド起動
+    {
+      "label": "docker: compose up",
+      "type": "shell",
+      "command": "docker compose up -d",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+
+    // compose を停止・削除
+    {
+      "label": "docker: compose down",
+      "type": "shell",
+      "command": "docker compose down",
+      "group": "build",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+
+    // Kafka ブローカーのログを追跡（デバッグ用）
+    {
+      "label": "docker: kafka logs",
+      "type": "shell",
+      "command": "docker compose logs -f kafka",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+
+    // Debezium Connect のログを追跡（コネクタ関連のエラー確認に有用）
+    {
+      "label": "docker: connect logs",
+      "type": "shell",
+      "command": "docker compose logs -f connect",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      }
+    },
+
+    // Postgres に入るための psql シェルを起動（コンテナ内）
+    {
+      "label": "psql: open shell (postgres)",
+      "type": "shell",
+      "command": "docker compose exec -it pg psql -U postgres -d demo",
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "panel": "shared"
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+/*
+  VS Code ワークスペース設定（コメントを許可するため jsonc 相当として扱います）
+  ここでは主に開発体験を改善するための editor / formatter / eslint / terminal 関連を設定しています。
+*/
+{
+  // 保存時に自動でフォーマットする（Prettier を既定フォーマッタとして想定）
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+
+  // JavaScript の組み込みフォーマッタは無効化（Prettier を優先）
+  "javascript.format.enable": false,
+  "json.format.enable": true,
+
+  // ESLint を JavaScript / React ファイルに対して有効化
+  "eslint.validate": ["javascript", "javascriptreact"],
+
+  // macOS のデフォルトシェル
+  "terminal.integrated.defaultProfile.osx": "zsh",
+
+  // エクスプローラーで非表示にするパターン。大きなフォルダを除外してパフォーマンスを改善。
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/.git": true,
+    "**/dist": true,
+    "**/kafkadata": true
+  },
+
+  // ファイル監視から除外するパターン。大量のファイル変化を避けるため。
+  "files.watcherExclude": {
+    "**/kafkadata/**": true
+  }
+}

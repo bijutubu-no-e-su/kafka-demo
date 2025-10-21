@@ -1,0 +1,11 @@
+{
+  "folders": [
+    {
+      "path": "../"
+    }
+  ],
+  "settings": {
+    // 設定は .vscode/settings.json に分割済み
+  },
+  "extensions": {}
+}
