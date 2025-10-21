@@ -113,6 +113,11 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
+    command:
+      - bash
+      - -lc
+      - |
+        /docker-entrypoint.sh start
   ksqldb:
     # ksqlDB サーバー: Kafka のストリームを SQL ライクに処理できる
     image: confluentinc/ksqldb-server:0.29.0
@@ -129,7 +134,38 @@ services:
       KSQL_KSQL_SERVICE_ID: 'ksql-demo'
       KSQL_KSQL_STREAMS_AUTO_OFFSET_RESET: earliest
     volumes:
-      - ./ksql:/opt/ksql
+      - ./ksql/statements.sql:/etc/ksqldb/statements.sql:ro
+  # Debezium コネクタ登録（ワンショット）
+  connect-init:
+    image: curlimages/curl:8.8.0
+    container_name: connect-init
+    depends_on:
+      connect:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c', '/work/register.sh']
+    volumes:
+      - ./connect-init/register.sh:/work/register.sh:ro
+
+  # DB書き戻し（B/C/Dトピック → Postgres upsert）
+  db-writer:
+    build: ./db-writer
+    platform: linux/amd64
+    container_name: db-writer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:9092
+      TOPICS: b_panel_topic,c_panel_topic,d_panel_topic
+      PGHOST: pg
+      PGPORT: '5432'
+      PGDATABASE: demo
+      PGUSER: postgres
+      PGPASSWORD: postgres
   ui:
     # シンプルな React + Express の UI。kafkajs でトピックを購読し SSE でブラウザへ配信する
     build: ./ui

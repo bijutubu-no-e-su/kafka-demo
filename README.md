@@ -18,93 +18,158 @@
 
 起動方法（docker-compose を利用）
 
-1. サービスをバックグラウンドで起動
+# kafka-demo
+
+このリポジトリは、PostgreSQL の変更（CDC）を Debezium → Kafka → ksqlDB のパイプラインで流し、
+最終的に React + SSE（Server-Sent Events）でブラウザにリアルタイム表示するデモです。
+
+README を最新化しました。以下は現在の構成、起動手順、重要ファイル、デバッグのヒントです。
+
+## 構成（主なコンポーネント）
+
+- `kafka` : Confluent Kafka ブローカー（compose 内は `kafka:9092`、ホスト向けに `localhost:29092` を公開）
+- `postgres` (`debezium/postgres`) : デモ用の Postgres（logical replication 対応）
+- `connect` : Debezium Connect（Postgres の変更を Kafka トピックに送信）
+- `ksqldb` : ksqlDB サーバ（`./ksql/statements.sql` を参照してストリーム／テーブルを作る想定）
+- `db-writer` : Kafka の B/C/D 系トピックを受けて Postgres に upsert する（データ循環の例）
+- `ui` : React + Express（`kafkajs` でトピックを購読して SSE でブラウザに配信）
+- `connect-init` : 初期化用のコンテナ（connect にコネクタを登録するためのスクリプトを実行）
+
+## 重要ファイル
+
+- `docker-compose.yml` : 全サービスの定義（トピック設定、環境変数、ボリューム等）
+- `init/01_schema.sql` : Postgres の初期スキーマとサンプルデータ（例: `a_panel` テーブル）
+- `ksql/statements.sql` : ksqlDB のサンプル定義（A_SRC / A_REKEY / B_TBL / C_TBL / D_TBL）
+- `connect-init/register.sh` : Debezium コネクタを自動登録するスクリプト（`connect-init` コンテナから実行）
+- `ui/` : UI のソースコード（React + Express）
+  - `ui/server.js` : Kafka を購読し SSE にブロードキャストするサーバ
+  - `ui/src/` : React アプリ（`App.jsx`, `main.jsx`, `styles.css`）
+
+## 起動手順（ローカル、docker-compose 利用）
+
+1. コンテナ群をバックグラウンドで起動
 
 ```bash
 docker compose up -d
 ```
 
-2. サービス状況確認
+2. サービスの状態を確認
 
 ```bash
 docker compose ps
 ```
 
-3. ksqlDB
+3. 初期化スクリプトの実行確認
 
-- ksqlDB サーバーは http://localhost:8088 でアクセス可能です（ksqlDB UI を利用する場合）。
+- `connect-init` コンテナは `connect` が起動した後に `connect` へコネクタを登録するためのスクリプトを実行します。`docker compose logs connect-init` で実行状況を確認してください。
 
-4. Debezium Connect REST API
+4. ksqlDB
 
-- コネクタの登録は http://localhost:8083 に対して行います（POST で JSON を送る）。
+- ksqlDB サーバは `http://localhost:8088` でアクセス可能です（ksqlDB UI や REST API を使用して `ksql/statements.sql` を適用できます）。
 
 5. UI
 
-- ブラウザで http://localhost:3000 を開くと、SSE を使ったデモ UI を確認できます。
+- ブラウザで `http://localhost:3000` を開くと UI が表示されます（Compose 設定では UI コンテナが `3000` ポートでリッスン）。
 
-設定・注意点
+### UI をローカルで開発モードで動かす
 
-- `docker-compose.yml` の重要な挙動:
-  - Kafka は compose 内では `kafka:9092`、ホスト向けには `localhost:29092`（compose でのポートマッピング）として公開されています。
-  - Postgres は `debezium/postgres` イメージを使用しており、logical replication を有効にするための設定や初期スクリプト（`init/`）が組み込まれています。
-  - Debezium Connect は Postgres を `pg:5432`（サービス名 `postgres`、container_name `pg`）で参照する想定です。
-  - UI サービスは compose ネットワーク内で `kafka:9092` に接続するように設定されています。
+もしソースを直接編集しながら開発する場合:
 
-Debezium / Postgres のよくある落とし穴
-
-- トピック名: Debezium の Postgres コネクタはトピック命名に `database.server.name` を使います（`topic.prefix` ではありません）。デフォルトでは `${database.server.name}.public.a_panel` のような名前になります。
-- Postgres 側設定: logical replication を使うために `wal_level=logical`、十分な `max_replication_slots`、`max_wal_senders` が必要です。`debezium/postgres` イメージはデフォルトで整備されていますが、通常の Postgres イメージを使う場合は注意してください。
-- コネクタ用ユーザー: Debezium が使う Postgres ユーザーにレプリケーション権限が必要です。
-
-ksqlDB のポイント
-
-- `ksql/statements.sql` は `pg.public.a_panel` を元に `A_STREAM` を作り、`B_STREAM`/`C_STREAM`/`D_STREAM` を派生させます。
-- ソーストピックが存在し、JSON フォーマット（または ksqlDB 側で期待されるフォーマット）になっていることを確認してください。Avro などを使う場合は ksqlDB の `VALUE_FORMAT` を合わせる必要があります。
-
-UI のポイント
-
-- `ui/server.js` は `TOPICS` 環境変数で列挙されたトピックを購読します。デフォルトは `pg.public.a_panel,B_STREAM,C_STREAM,D_STREAM` です。
-- `fromBeginning: true` で購読しているため、初回起動時に既存メッセージをすべて再生します。
-
-トラブルシューティングチェックリスト
-
-- Debezium がトピックを作らない場合:
-
-  - Connect コンテナのログを確認: `docker compose logs -f connect`
-  - コネクタ設定が正しいか確認（`http://localhost:8083/connectors` に対する POST ボディ）
-  - Connect コンテナから Postgres に `pg` で到達できるか確認
-
-- UI が Kafka に接続できない場合:
-
-  - Kafka ブローカーが稼働しているか確認: `docker compose logs kafka`、またはコンテナ内で `kafka-topics --bootstrap-server kafka:9092 --list` を実行
-  - UI を compose 外で動かす場合はブローカー接続先を `localhost:29092` に変更する必要があります。
-
-- トピック名が期待どおりでない場合:
-  - コネクタ設定内の `database.server.name` と、もし使っていれば RegexRouter 等の transform 設定を確認してください。正規表現内のドットは `\.` のようにエスケープが必要です。
-
-コネクタ設定の例（最小限の重要項目）
-
-```json
-{
-  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-  "database.hostname": "pg",
-  "database.port": "5432",
-  "database.user": "postgres",
-  "database.password": "postgres",
-  "database.dbname": "demo",
-  "database.server.name": "pg",
-  "plugin.name": "pgoutput",
-  "publication.autocreate.mode": "filtered",
-  "schema.include.list": "public",
-  "table.include.list": "public.a_panel"
-}
+```bash
+cd ui
+npm install
+npm run dev    # Vite の dev サーバを起動 (ホットリロードあり)
 ```
 
-次にやれること
+または本番ビルドを作成して server.js で配信する場合:
 
-- コネクタの JSON と登録用の curl コマンドを README に追加して自動化する
-- こちらで `docker compose up` を実行して動作確認とログ解析を行う（実行許可が必要）
+```bash
+cd ui
+npm install
+npm run build
+npm start      # server.js が dist を配信して http://localhost:3000 を提供
+```
 
-ライセンス
+## 現在のトピック設計（重要）
+
+- デフォルトで UI は次のトピックを購読するように設定されています（`ui/server.js` の `TOPICS` 環境変数）:
+  - `pg.public.a_panel` (Debezium が生成するトピック)
+  - `b_panel_topic`, `c_panel_topic`, `d_panel_topic` (ksqlDB / TABLE 出力や中間トピックの例)
+
+※ 環境変数 `TOPICS` を変更すれば購読するトピックをカスタマイズできます。Compose では `TOPICS` が `pg.public.a_panel,b_panel_topic,c_panel_topic,d_panel_topic` に設定されています。
+
+## ksqlDB と statements.sql のポイント
+
+- `ksql/statements.sql` は Debezium の出力（JSON）を読み、内部で再キー化 (A_REKEY) した上で TABLE を作り、色変換（black → pink → grey → white）を適用します。
+- ksqlDB のバージョンや環境によっては JSON の unwrap（payload.after の展開）が必要です。`ksql/statements.sql` の注釈を参照して、Debezium の出力形式に合わせてください。
+
+## db-writer の役割
+
+- `db-writer` サービスは Kafka 上の `b_panel_topic`, `c_panel_topic`, `d_panel_topic` を監視し、Postgres に対して upsert（挿入/更新）を行う小さなワーカーです。これによりデータの往復パターン（Postgres → Kafka → ksqlDB → Kafka → Postgres）を実演できます。
+
+## よくある問題と確認コマンド
+
+- Connect がコネクタを作成しているか確認:
+
+```bash
+docker compose logs -f connect
+```
+
+- Kafka のトピック一覧確認（コンテナ内で実行）:
+
+```bash
+docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --list
+```
+
+- ksqlDB のログや UI でステートメントの適用状況を確認
+
+- UI のログ確認:
+
+```bash
+docker compose logs -f ui
+```
+
+- ブラウザの DevTools で `/sse` のイベントストリームを確認（Network タブ）
+
+## トラブルシューティングのヒント
+
+- UI に色が反映されない場合:
+
+  - サーバが送っている SSE メッセージの payload を確認（ブラウザの Network → `/sse` を開く）。
+  - サーバ側ログ（`docker compose logs ui`）で JSON パースや broadcast エラーが出ていないか確認。
+  - 受け取った color 値が CSS として有効（例: `black`, `#000000` 等）か確認。
+
+- Kafka にメッセージが到達していない場合:
+  - Connect のログ、Postgres 側の WAL / replication 設定を確認。
+  - Debezium のコネクタ設定（`database.server.name`, `table.include.list` 等）を見直す。
+
+## コネクタ登録の例（curl）
+
+`connect-init/register.sh` が自動で登録する想定ですが、手動で登録したい場合の最小例:
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  --data '{
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "pg",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "demo",
+    "database.server.name": "pg",
+    "plugin.name": "pgoutput",
+    "publication.autocreate.mode": "filtered",
+    "schema.include.list": "public",
+    "table.include.list": "public.a_panel"
+  }' \
+  http://localhost:8083/connectors
+```
+
+## 追加の推奨作業
+
+- ksqlDB の `statements.sql` は環境に合わせて JSON パスや unwrap の有無を調整してください。実際の Kafka メッセージ（`pg.public.a_panel`）のサンプルを確認すると調整が容易になります。
+- UI に受信メッセージのデバッグ表示（raw JSON ビュー）を一時的に追加すると問題の切り分けが速くなります。
+
+## ライセンス
 
 教育目的のサンプルコードとして提供します。

@@ -55,7 +55,12 @@ function broadcast(payloadObj) {
 // メッセージから color を取り出すヘルパー
 // ksqlDB や Debezium により JSON のキー名が大文字化されることがあるため、小文字・大文字両方を参照する
 function normalizeColor(obj) {
-  return obj?.color ?? obj?.COLOR ?? 'unknown'
+  // Try several common locations produced by Debezium / ksqlDB / other connectors.
+  // Messages often have the shape: { payload: { after: { id, color, ... } } }
+  // or: { after: { id, color } } or a flat { id, color }.
+  if (!obj) return 'unknown'
+  const payload = obj?.payload?.after ?? obj?.after ?? obj
+  return payload?.color ?? payload?.COLOR ?? payload?.Color ?? payload?.colour ?? 'unknown'
 }
 
 // トピック名から表示パネルの識別子に変換するユーティリティ
@@ -91,14 +96,23 @@ async function runConsumer() {
         if (!str) return
         const json = JSON.parse(str)
 
-        const color = normalizeColor(json)
-        // JSON のキー名の違いに備えて id/ID の双方をチェック
-        const id = json?.id ?? json?.ID ?? 1
+        // Many connector messages wrap the actual row under payload.after or after.
+        const payload = json?.payload?.after ?? json?.after ?? json
 
-        // 現状は id=1 のみを UI に出力する（必要なら複数 ID 対応へ拡張）
+        // Debug: log the received payload so we can inspect its shape
+        console.log('[ui] recv', { topic, partition, offset: message.offset, payload })
+
+        const color = normalizeColor(payload)
+        // Check id in the same payload locations (id / ID)
+        const id = payload?.id ?? payload?.ID ?? 1
+
+        // Only surface the row with id=1 to the UI (this demo tracks a single row).
         if (id === 1) {
           state[panel] = { id, color }
-          broadcast({ panel, id, color, ts: Date.now() })
+          const msg = { panel, id, color, ts: Date.now() }
+          // Debug: log what we broadcast to SSE clients
+          console.log('[ui] broadcast', msg)
+          broadcast(msg)
         }
       } catch (e) {
         // JSON パースや broadcast に失敗した場合はログに出す
@@ -131,9 +145,22 @@ app.get('*', (_, res) => {
 // 起動
 app.listen(PORT, () => {
   console.log(`[ui] listening on http://localhost:${PORT}`)
-  // Kafka 消費を開始
-  runConsumer().catch((e) => {
-    console.error('Kafka consumer failed:', e)
-    process.exit(1)
-  })
+  console.log('[ui] configured TOPICS:', TOPICS)
+  // Kafka 消費を開始（接続失敗時は即終了せずリトライする）
+  // 一時的な UNKNOWN_TOPIC_OR_PARTITION やメタデータ未同期などのエラーは
+  // 環境起動順序の問題で発生しやすいため、ここで再試行を行います。
+  const startConsumerWithRetry = async (attempt = 1) => {
+    try {
+      await runConsumer()
+      console.log('[ui] Kafka consumer started')
+    } catch (err) {
+      console.error(`[ui] Kafka consumer failed (attempt=${attempt}):`, err)
+      // exponential backoff (ms), capped to 30s
+      const delay = Math.min(30000, 2000 * attempt)
+      console.log(`[ui] retrying to start consumer in ${Math.round(delay / 1000)}s...`)
+      setTimeout(() => startConsumerWithRetry(attempt + 1), delay)
+    }
+  }
+
+  startConsumerWithRetry()
 })
