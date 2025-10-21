@@ -67,7 +67,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 30
-  postgres:
+  pg:
     # Debezium が推奨する Postgres 連携イメージ。logical replication に必要な設定が含まれる
     image: debezium/postgres:16-alpine
     container_name: pg
@@ -81,45 +81,40 @@ services:
       # 起動時に init スクリプトを実行してスキーマ/サンプルデータを投入
       - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d demo']
+      test: ['CMD-SHELL', 'pg_isready -U pg -d demo']
       interval: 5s
       timeout: 5s
       retries: 30
   connect:
-    # Debezium Connect: Postgres の変更を Kafka に送るコネクタを動かす
-    # connector の登録は REST API（http://connect:8083）に対して行う
     image: debezium/connect:2.6
     platform: linux/amd64
     container_name: connect
     depends_on:
       kafka:
         condition: service_healthy
-      postgres:
-        condition: service_started
+      pg:
+        condition: service_healthy
     ports:
       - '8083:8083'
     environment:
       BOOTSTRAP_SERVERS: kafka:9092
       GROUP_ID: connect-cluster
-      CONFIG_STORAGE_TOPIC: _connect_configs
-      OFFSET_STORAGE_TOPIC: _connect_offsets
-      STATUS_STORAGE_TOPIC: _connect_status
-      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONFIG_STORAGE_TOPIC: _connect-configs # ← 統一
+      OFFSET_STORAGE_TOPIC: _connect-offsets # ← 統一
+      STATUS_STORAGE_TOPIC: _connect-status # ← 統一
+      KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
       VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       KEY_CONVERTER_SCHEMAS_ENABLE: 'false'
       VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      PLUGIN_PATH: /kafka/connect,/usr/share/java,/usr/share/confluent-hub-components # ← 追加
     healthcheck:
       test: ['CMD', 'curl', '-fsS', 'http://localhost:8083/connectors']
       interval: 10s
       timeout: 5s
       retries: 30
-    command:
-      - bash
-      - -lc
-      - |
-        /docker-entrypoint.sh start
+    # command: は削除（ENTRYPOINTに任せる）
+
   ksqldb:
-    # ksqlDB サーバー: Kafka のストリームを SQL ライクに処理できる
     image: confluentinc/ksqldb-server:0.29.0
     platform: linux/amd64
     container_name: ksqldb
@@ -132,19 +127,36 @@ services:
       KSQL_BOOTSTRAP_SERVERS: kafka:9092
       KSQL_LISTENERS: http://0.0.0.0:8088
       KSQL_KSQL_SERVICE_ID: 'ksql-demo'
+      # ← 両方にヒープ指定（どのパスでも反映されるよう保険）
+      KSQL_HEAP_OPTS: '-Xms512m -Xmx1g'
+      KSQL_OPTS: '-Xms512m -Xmx1g'
       KSQL_KSQL_STREAMS_AUTO_OFFSET_RESET: earliest
+      # KSQL_KSQL_QUERIES_FILE: /etc/ksqldb/statements.sql
     volumes:
       - ./ksql/statements.sql:/etc/ksqldb/statements.sql:ro
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:8088/healthcheck']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
   # Debezium コネクタ登録（ワンショット）
   connect-init:
     image: curlimages/curl:8.8.0
     container_name: connect-init
+    restart: 'on-failure:3' # ← 引用
     depends_on:
       connect:
         condition: service_healthy
-      postgres:
+      pg:
         condition: service_healthy
-    entrypoint: ['/bin/sh', '-c', '/work/register.sh']
+      ksqldb: # ← 追加（KSQL叩くなら必須）
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c', '/bin/sh /work/register.sh'] # ← 実行権限不要化
+    environment:
+      CONNECT_URL: 'http://connect:8083' # ← スクリプトで使えるように
+      KSQL_URL: 'http://ksqldb:8088'
     volumes:
       - ./connect-init/register.sh:/work/register.sh:ro
 
@@ -154,10 +166,8 @@ services:
     platform: linux/amd64
     container_name: db-writer
     depends_on:
-      kafka:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
+      - kafka
+      - pg
     environment:
       KAFKA_BROKER: kafka:9092
       TOPICS: b_panel_topic,c_panel_topic,d_panel_topic
