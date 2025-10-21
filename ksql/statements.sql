@@ -3,7 +3,7 @@ SET
   'auto.offset.reset' = 'earliest';
 
 -- Debezium（unwrap後, スキーマレスJSON）を読む
-CREATE STREAM IF NOT EXISTS A_SRC (id INT KEY, color VARCHAR, updated_at BIGINT)
+CREATE STREAM IF NOT EXISTS A_SRC (id INT, color VARCHAR, updated_at BIGINT)
 WITH
   (
     KAFKA_TOPIC = 'pg.public.a_panel',
@@ -28,7 +28,7 @@ FROM
   A_SRC EMIT CHANGES;
 
 -- B → C
-CREATE STREAM IF NOT EXISTS B_SRC (id INT KEY, color VARCHAR, updated_at BIGINT)
+CREATE STREAM IF NOT EXISTS B_SRC (id INT, color VARCHAR, updated_at BIGINT)
 WITH
   (
     KAFKA_TOPIC = 'b_panel_topic',
@@ -52,7 +52,7 @@ FROM
   B_SRC EMIT CHANGES;
 
 -- C → D
-CREATE STREAM IF NOT EXISTS C_SRC (id INT KEY, color VARCHAR, updated_at BIGINT)
+CREATE STREAM IF NOT EXISTS C_SRC (id INT, color VARCHAR, updated_at BIGINT)
 WITH
   (
     KAFKA_TOPIC = 'c_panel_topic',
