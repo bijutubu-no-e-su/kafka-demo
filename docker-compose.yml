@@ -1,0 +1,84 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    platform: linux/amd64
+    container_name: kafka
+    ports:
+      - '29092:29092' # ホスト→localhost:29092
+    environment:
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://kafka:9092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:29092'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+    volumes:
+      - kafkadata:/var/lib/kafka/data
+    command: >
+      bash -lc '
+        set -e
+
+        # 1) CLUSTER_ID を用意（未設定なら生成）
+        if [ -z "$${CLUSTER_ID:-}" ]; then
+          if command -v kafka-storage >/dev/null 2>&1; then
+            export CLUSTER_ID=$$(kafka-storage random-uuid)
+          else
+            export CLUSTER_ID=$$(kafka-storage.sh random-uuid)
+          fi
+          echo "[kafka] generated CLUSTER_ID=$$CLUSTER_ID"
+        else
+          echo "[kafka] using provided CLUSTER_ID=$$CLUSTER_ID"
+        fi
+
+        # 2) env→/etc/kafka/kafka.properties 生成
+        /etc/confluent/docker/configure
+
+        # 3) 初回のみフォーマット
+        if [ ! -f "/var/lib/kafka/data/meta.properties" ]; then
+          echo "[kafka] formatting storage with CLUSTER_ID=$$CLUSTER_ID..."
+          if command -v kafka-storage >/dev/null 2>&1; then
+            kafka-storage format --ignore-formatted -t "$$CLUSTER_ID" -c /etc/kafka/kafka.properties
+          else
+            kafka-storage.sh format --ignore-formatted -t "$$CLUSTER_ID" -c /etc/kafka/kafka.properties
+          fi
+        fi
+
+        # 4) 通常起動
+        exec /etc/confluent/docker/run
+      '
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'bash',
+          '-lc',
+          'kafka-topics --bootstrap-server kafka:9092 --list >/dev/null 2>&1 || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+  postgres:
+    image: debezium/postgres:16-alpine
+    container_name: pg
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=demo
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d demo']
+      interval: 5s
+      timeout: 5s
+      retries: 30
+volumes:
+  kafkadata:
