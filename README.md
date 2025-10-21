@@ -173,3 +173,12 @@ curl -X POST -H "Content-Type: application/json" \
 ## ライセンス
 
 教育目的のサンプルコードとして提供します。
+
+## 起動
+
+起動: docker compose down -v && docker compose up -d
+
+ksql 定義投入:
+jq -n --rawfile sql ksql/statements.sql '{ksql:$sql,streamsProperties:{}}' | curl -sS -X POST http://localhost:8088/ksql -H 'Content-Type: application/vnd.ksql.v1+json; charset=utf-8' -d @-
+
+動作確認: A を UPDATE → b_panel_topic / c_panel_topic / d_panel_topic を確認
