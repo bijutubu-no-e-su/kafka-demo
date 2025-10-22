@@ -1,0 +1,10 @@
+{
+  "name": "db-writer-ab",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "kafkajs": "^2.2.4",
+    "pg": "^8.11.3"
+  }
+}
