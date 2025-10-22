@@ -71,6 +71,7 @@ services:
   pg:
     # Debezium が推奨する Postgres 連携イメージ。logical replication に必要な設定が含まれる
     image: debezium/postgres:16-alpine
+    platform: linux/amd64
     container_name: pg
     environment:
       - POSTGRES_USER=postgres
@@ -227,7 +228,7 @@ services:
 
   web:
     build: ./web
-    platform: linux/amd64
+    # platform: linux/amd64
     container_name: web
     depends_on:
       - pg
@@ -242,7 +243,7 @@ services:
       - '8080:8080'
   ui:
     build: ./ui
-    platform: linux/amd64
+    # platform: linux/amd64
     container_name: ui
     depends_on:
       - web

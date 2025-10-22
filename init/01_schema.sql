@@ -62,4 +62,3 @@ ON CONFLICT (id) DO UPDATE SET color = EXCLUDED.color, updated_at = now();
 
 INSERT INTO public.d_panel (id, color) VALUES (1, 'blue')
 ON CONFLICT (id) DO UPDATE SET color = EXCLUDED.color, updated_at = now();
-

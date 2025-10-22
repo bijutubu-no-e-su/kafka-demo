@@ -1,184 +1,362 @@
-# kafka-demo
+# Kafka Demo - リアルタイムデータパイプラインシステム
 
-このリポジトリは、PostgreSQL の変更（CDC）を Debezium を使って Apache Kafka に流し、ksqlDB でストリーム処理を行い、React + SSE（Server-Sent Events）で結果を可視化する小さなデモです。
+これは Kafka、Debezium、ksqlDB、PostgreSQL を使用したリアルタイムデータ変換パイプラインのデモシステムです。データベースの変更を Kafka 経由でリアルタイムに監視し、段階的なデータ変換を行いながら、Web UI で結果を可視化できます。
 
-目次
+## システム概要
 
-- `docker-compose.yml` - Kafka（Confluent）、Debezium Postgres、Debezium Connect、ksqlDB、UI をまとめて立ち上げる定義
-- `init/01_schema.sql` - Postgres の初期スキーマとサンプルデータ
-- `ksql/statements.sql` - Debezium が作成するトピックを元に ksqlDB のストリームを作る例
-- `ui/` - kafkajs を使って Kafka トピックを購読し、SSE でブラウザに配信する React + Express の UI
+![システム図]
 
-概要
+```text
+PostgreSQL (4つのテーブル: a_panel → b_panel → c_panel → d_panel)
+    ↓ (Debezium CDC)
+Apache Kafka (データストリーム)
+    ↓ (ksqlDB Stream Processing)
+段階的な色変換処理
+    ↓ (Kafka Connect Sink)
+PostgreSQL への書き戻し
+    ↓ (REST API)
+React ベースの Web UI
+```
 
-- Postgres（`debezium/postgres` イメージ）には `a_panel` テーブルがあり、初期データが 1 行挿入されています。
-- Debezium Connect が Postgres の変更を検知して `pg.public.a_panel` のようなトピックにイベントを送ります。
-- ksqlDB は `pg.public.a_panel` を読み取り、`B_STREAM`、`C_STREAM`、`D_STREAM` といった派生ストリームを作成して色の変換ロジックを適用します。
-- UI（Express + kafkajs）はこれらのトピックを購読し、ブラウザへ SSE で状態の更新を送ります。
+### データフロー
 
-起動方法（docker-compose を利用）
+1. **a_panel** テーブルのデータが更新される
+2. **Debezium** が変更を検知し、Kafka トピックに送信
+3. **ksqlDB** がストリーム処理で色変換ロジックを実行
+4. **db-writer** サービスが変換結果を次のテーブルに書き込み
+5. **Web UI** が最新の状態をリアルタイム表示
 
-# kafka-demo
+### 色変換ルール
 
-このリポジトリは、PostgreSQL の変更（CDC）を Debezium → Kafka → ksqlDB のパイプラインで流し、
-最終的に React + SSE（Server-Sent Events）でブラウザにリアルタイム表示するデモです。
+- A → B: `blue` → `yellow`, その他の色も変換
+- B → C: `yellow` → `red`, その他の色も変換
+- C → D: `red` → `green`, その他の色も変換
 
-README を最新化しました。以下は現在の構成、起動手順、重要ファイル、デバッグのヒントです。
+## システム構成
 
-## 構成（主なコンポーネント）
+### コアサービス
 
-- `kafka` : Confluent Kafka ブローカー（compose 内は `kafka:9092`、ホスト向けに `localhost:29092` を公開）
-- `postgres` (`debezium/postgres`) : デモ用の Postgres（logical replication 対応）
-- `connect` : Debezium Connect（Postgres の変更を Kafka トピックに送信）
-- `ksqldb` : ksqlDB サーバ（`./ksql/statements.sql` を参照してストリーム／テーブルを作る想定）
-- `db-writer` : Kafka の B/C/D 系トピックを受けて Postgres に upsert する（データ循環の例）
-- `ui` : React + Express（`kafkajs` でトピックを購読して SSE でブラウザに配信）
-- `connect-init` : 初期化用のコンテナ（connect にコネクタを登録するためのスクリプトを実行）
+| サービス    | 説明                                     | ポート |
+| ----------- | ---------------------------------------- | ------ |
+| **kafka**   | Apache Kafka ブローカー（KRaft モード）  | 29092  |
+| **pg**      | PostgreSQL データベース（Debezium 対応） | 5432   |
+| **connect** | Debezium Kafka Connect                   | 8083   |
+| **ksqldb**  | ksqlDB ストリーム処理エンジン            | 8088   |
 
-## 重要ファイル
+### アプリケーションサービス
 
-- `docker-compose.yml` : 全サービスの定義（トピック設定、環境変数、ボリューム等）
-- `init/01_schema.sql` : Postgres の初期スキーマとサンプルデータ（例: `a_panel` テーブル）
-- `ksql/statements.sql` : ksqlDB のサンプル定義（A_SRC / A_REKEY / B_TBL / C_TBL / D_TBL）
-- `connect-init/register.sh` : Debezium コネクタを自動登録するスクリプト（`connect-init` コンテナから実行）
-- `ui/` : UI のソースコード（React + Express）
-  - `ui/server.js` : Kafka を購読し SSE にブロードキャストするサーバ
-  - `ui/src/` : React アプリ（`App.jsx`, `main.jsx`, `styles.css`）
+| サービス         | 説明                            | ポート |
+| ---------------- | ------------------------------- | ------ |
+| **web**          | REST API サーバー（Express.js） | 8080   |
+| **ui**           | フロントエンド（React + Vite）  | 5173   |
+| **db-writer-ab** | A→B パネル変換                  | -      |
+| **db-writer-bc** | B→C パネル変換                  | -      |
+| **db-writer-cd** | C→D パネル変換                  | -      |
 
-## 起動手順（ローカル、docker-compose 利用）
+### ユーティリティ
 
-1. コンテナ群をバックグラウンドで起動
+| サービス         | 説明                      |
+| ---------------- | ------------------------- |
+| **connect-init** | Debezium コネクタ自動登録 |
+
+## 前提条件
+
+- Docker Desktop または Docker Engine + Docker Compose
+- 最低 8GB の RAM 推奨
+- ポート 5173, 8080, 8083, 8088, 29092, 5432 が使用可能であること
+
+## クイックスタート
+
+### 1. システム起動
 
 ```bash
+# 全サービス起動
 docker compose up -d
+
+# ログ確認
+docker compose logs -f
 ```
 
-2. サービスの状態を確認
+### 2. Web UI へアクセス
+
+ブラウザで <http://localhost:5173> を開く
+
+4 つのパネル（a_panel, b_panel, c_panel, d_panel）の現在の色が表示されます。
+
+### 3. データ変更をテスト
+
+PostgreSQL に直接接続してデータを変更：
 
 ```bash
-docker compose ps
+# PostgreSQL シェルに接続
+docker compose exec -it pg psql -U postgres -d demo
+
+# a_panel の色を変更
+UPDATE a_panel SET color = 'blue' WHERE id = 1;
+
+# 結果確認
+SELECT 'a_panel' as table_name, color FROM a_panel WHERE id = 1
+UNION ALL
+SELECT 'b_panel', color FROM b_panel WHERE id = 1
+UNION ALL
+SELECT 'c_panel', color FROM c_panel WHERE id = 1
+UNION ALL
+SELECT 'd_panel', color FROM d_panel WHERE id = 1;
 ```
 
-3. 初期化スクリプトの実行確認
+Web UI で色の変化がリアルタイムに反映されることを確認できます。
 
-- `connect-init` コンテナは `connect` が起動した後に `connect` へコネクタを登録するためのスクリプトを実行します。`docker compose logs connect-init` で実行状況を確認してください。
+## 利用可能なタスク
 
-4. ksqlDB
-
-- ksqlDB サーバは `http://localhost:8088` でアクセス可能です（ksqlDB UI や REST API を使用して `ksql/statements.sql` を適用できます）。
-
-5. UI
-
-- ブラウザで `http://localhost:3000` を開くと UI が表示されます（Compose 設定では UI コンテナが `3000` ポートでリッスン）。
-
-### UI をローカルで開発モードで動かす
-
-もしソースを直接編集しながら開発する場合:
+VS Code のタスクまたは以下のコマンドでシステムを管理できます：
 
 ```bash
-cd ui
-npm install
-npm run dev    # Vite の dev サーバを起動 (ホットリロードあり)
-```
+# システム起動
+docker compose up -d
 
-または本番ビルドを作成して server.js で配信する場合:
+# システム停止
+docker compose down
 
-```bash
-cd ui
-npm install
-npm run build
-npm start      # server.js が dist を配信して http://localhost:3000 を提供
-```
+# Kafka ログ監視
+docker compose logs -f kafka
 
-## 現在のトピック設計（重要）
-
-- デフォルトで UI は次のトピックを購読するように設定されています（`ui/server.js` の `TOPICS` 環境変数）:
-  - `pg.public.a_panel` (Debezium が生成するトピック)
-  - `b_panel_topic`, `c_panel_topic`, `d_panel_topic` (ksqlDB / TABLE 出力や中間トピックの例)
-
-※ 環境変数 `TOPICS` を変更すれば購読するトピックをカスタマイズできます。Compose では `TOPICS` が `pg.public.a_panel,b_panel_topic,c_panel_topic,d_panel_topic` に設定されています。
-
-## ksqlDB と statements.sql のポイント
-
-- `ksql/statements.sql` は Debezium の出力（JSON）を読み、内部で再キー化 (A_REKEY) した上で TABLE を作り、色変換（black → pink → grey → white）を適用します。
-- ksqlDB のバージョンや環境によっては JSON の unwrap（payload.after の展開）が必要です。`ksql/statements.sql` の注釈を参照して、Debezium の出力形式に合わせてください。
-
-## db-writer の役割
-
-- `db-writer` サービスは Kafka 上の `b_panel_topic`, `c_panel_topic`, `d_panel_topic` を監視し、Postgres に対して upsert（挿入/更新）を行う小さなワーカーです。これによりデータの往復パターン（Postgres → Kafka → ksqlDB → Kafka → Postgres）を実演できます。
-
-## よくある問題と確認コマンド
-
-- Connect がコネクタを作成しているか確認:
-
-```bash
+# Connect ログ監視
 docker compose logs -f connect
+
+# PostgreSQL シェル
+docker compose exec -it pg psql -U postgres -d demo
 ```
 
-- Kafka のトピック一覧確認（コンテナ内で実行）:
+## トラブルシューティング
+
+### ksqlDB 関連
+
+ksqlDB のストリーム定義に問題がある場合：
 
 ```bash
-docker compose exec kafka kafka-topics --bootstrap-server kafka:9092 --list
+# 現状確認
+./ksql_check.sh
+
+# 問題修正
+./ksql_check_and_fix.sh
+
+# 完全リセット
+./ksql_reset_and_recreate.sh
 ```
 
-- ksqlDB のログや UI でステートメントの適用状況を確認
+### よくある問題
 
-- UI のログ確認:
+1. **コンテナが起動しない**
 
-```bash
-docker compose logs -f ui
+   - Docker リソース不足の可能性
+   - ポート衝突の確認
+
+2. **データが流れない**
+
+   - Debezium コネクタの状態確認
+   - ksqlDB ストリームの状態確認
+
+3. **Web UI に接続できない**
+   - `web` サービスの起動確認
+   - API エンドポイント（<http://localhost:8080/api/panels>）の動作確認
+
+## 開発・カスタマイズ
+
+### 色変換ロジックの変更
+
+1. **ksqlDB ストリーム**: `ksql/statements.sql`
+2. **db-writer 変換マップ**: 各 `db-writer-*` の環境変数 `COLOR_MAP_JSON`
+
+### UI のカスタマイズ
+
+- フロントエンド: `ui/src/`
+- API サーバー: `web/server.js`
+
+### データベーススキーマ
+
+- 初期化スクリプト: `init/01_schema.sql`
+- 4 つのテーブル（a_panel, b_panel, c_panel, d_panel）
+- 各テーブルに `updated_at` トリガーが設定済み
+
+## API リファレンス
+
+### REST API エンドポイント
+
+```http
+GET /api/panels
 ```
 
-- ブラウザの DevTools で `/sse` のイベントストリームを確認（Network タブ）
+レスポンス例：
 
-## トラブルシューティングのヒント
-
-- UI に色が反映されない場合:
-
-  - サーバが送っている SSE メッセージの payload を確認（ブラウザの Network → `/sse` を開く）。
-  - サーバ側ログ（`docker compose logs ui`）で JSON パースや broadcast エラーが出ていないか確認。
-  - 受け取った color 値が CSS として有効（例: `black`, `#000000` 等）か確認。
-
-- Kafka にメッセージが到達していない場合:
-  - Connect のログ、Postgres 側の WAL / replication 設定を確認。
-  - Debezium のコネクタ設定（`database.server.name`, `table.include.list` 等）を見直す。
-
-## コネクタ登録の例（curl）
-
-`connect-init/register.sh` が自動で登録する想定ですが、手動で登録したい場合の最小例:
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  --data '{
-    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
-    "database.hostname": "pg",
-    "database.port": "5432",
-    "database.user": "postgres",
-    "database.password": "postgres",
-    "database.dbname": "demo",
-    "database.server.name": "pg",
-    "plugin.name": "pgoutput",
-    "publication.autocreate.mode": "filtered",
-    "schema.include.list": "public",
-    "table.include.list": "public.a_panel"
-  }' \
-  http://localhost:8083/connectors
+```json
+{
+  "a": { "id": 1, "color": "blue", "updated_at": "2024-01-01T00:00:00.000Z" },
+  "b": { "id": 1, "color": "red", "updated_at": "2024-01-01T00:00:01.000Z" },
+  "c": { "id": 1, "color": "green", "updated_at": "2024-01-01T00:00:02.000Z" },
+  "d": { "id": 1, "color": "purple", "updated_at": "2024-01-01T00:00:03.000Z" }
+}
 ```
 
-## 追加の推奨作業
+## 技術スタック
 
-- ksqlDB の `statements.sql` は環境に合わせて JSON パスや unwrap の有無を調整してください。実際の Kafka メッセージ（`pg.public.a_panel`）のサンプルを確認すると調整が容易になります。
-- UI に受信メッセージのデバッグ表示（raw JSON ビュー）を一時的に追加すると問題の切り分けが速くなります。
+- **データ基盤**: Apache Kafka (KRaft), PostgreSQL, Debezium, ksqlDB
+- **バックエンド**: Node.js, Express.js
+- **フロントエンド**: React, TypeScript, Vite
+- **インフラ**: Docker, Docker Compose
 
 ## ライセンス
 
-教育目的のサンプルコードとして提供します。
+MIT License
 
-## 起動
+---
 
-起動: docker compose down -v && docker compose up -d
+このデモシステムは、リアルタイムデータパイプライン、Change Data Capture (CDC)、ストリーム処理の学習・検証に最適です。
 
-ksql 定義投入:
-jq -n --rawfile sql ksql/statements.sql '{ksql:$sql,streamsProperties:{}}' | curl -sS -X POST http://localhost:8088/ksql -H 'Content-Type: application/vnd.ksql.v1+json; charset=utf-8' -d @-
+## 詳細セットアップ
 
-動作確認: A を UPDATE → b_panel_topic / c_panel_topic / d_panel_topic を確認
+### 完全起動手順
+
+```bash
+# 1. 全サービス起動（データベース初期化含む）
+docker compose down -v && docker compose up -d
+
+# 2. 全サービスが起動するまで待機（約30秒）
+docker compose logs -f
+
+# 3. ksqlDB統計クエリを手動で投入（オプション）
+# ksqlDBコンテナ内で直接実行する方法
+docker compose exec ksqldb ksql http://localhost:8088
+```
+
+### ksqlDB 統計定義の投入
+
+**方法 1: ksqlDB シェル経由（推奨）**
+
+```bash
+# ksqlDBシェルに接続
+docker compose exec ksqldb ksql http://localhost:8088
+
+# シェル内で以下を実行
+SET 'auto.offset.reset' = 'earliest';
+
+CREATE STREAM IF NOT EXISTS a_panel_events (id INT, color VARCHAR, updated_at BIGINT)
+WITH (KAFKA_TOPIC = 'pg.public.a_panel', VALUE_FORMAT = 'JSON');
+
+CREATE TABLE IF NOT EXISTS color_stats AS
+SELECT color, COUNT(*) as total_changes
+FROM a_panel_events GROUP BY color;
+```
+
+**方法 2: 最も確実な方法（推奨）**
+
+```bash
+# ksqlDBコンテナ内からファイルを直接実行
+docker compose exec ksqldb bash -c "
+cat << 'EOF' | ksql http://localhost:8088
+SET 'auto.offset.reset' = 'earliest';
+
+CREATE STREAM IF NOT EXISTS a_panel_events (id INT, color VARCHAR, updated_at BIGINT)
+WITH (KAFKA_TOPIC = 'pg.public.a_panel', VALUE_FORMAT = 'JSON');
+
+CREATE TABLE IF NOT EXISTS color_stats AS
+SELECT color, COUNT(*) as total_changes
+FROM a_panel_events GROUP BY color;
+
+CREATE TABLE IF NOT EXISTS latest_updates AS
+SELECT 'a_panel' as panel_name, LATEST_BY_OFFSET(color) as current_color
+FROM a_panel_events GROUP BY 'a_panel';
+EOF
+"
+```
+
+**方法 3: jq 経由での投入（ネットワーク環境に依存）**
+
+```bash
+# 方法3-1: 完全なSQL文を一度に投入
+cat ksql/statements.sql | jq -Rs '{ksql: ., streamsProperties: {}}' | \
+curl -sS -X POST http://localhost:8088/ksql \
+  -H 'Content-Type: application/vnd.ksql.v1+json; charset=utf-8' \
+  -d @- | jq .
+
+# 方法3-2: より安全な方法（改行処理込み）
+jq -n --rawfile sql ksql/statements.sql \
+  --argjson props '{}' \
+  '{ksql: $sql, streamsProperties: $props}' | \
+curl -sS -X POST http://localhost:8088/ksql \
+  -H 'Content-Type: application/vnd.ksql.v1+json; charset=utf-8' \
+  -d @- | jq .
+
+# 方法3-3: コンテナ内からjq実行（プロキシ回避）
+docker compose exec ksqldb bash -c "
+echo 'SET \"auto.offset.reset\" = \"earliest\";
+
+CREATE STREAM IF NOT EXISTS a_panel_events (id INT, color VARCHAR, updated_at BIGINT)
+WITH (KAFKA_TOPIC = \"pg.public.a_panel\", VALUE_FORMAT = \"JSON\");
+
+CREATE TABLE IF NOT EXISTS color_stats AS
+SELECT color, COUNT(*) as total_changes
+FROM a_panel_events GROUP BY color;' | \
+jq -Rs '{ksql: ., streamsProperties: {}}' | \
+curl -sS -X POST http://localhost:8088/ksql \
+  -H 'Content-Type: application/vnd.ksql.v1+json; charset=utf-8' \
+  -d @-
+"
+```
+
+**方法 4: 手動でコピー&ペースト**
+
+```bash
+# 1. ksqlDBシェルに接続
+docker compose exec ksqldb ksql http://localhost:8088
+
+# 2. 以下のSQLを順番に実行
+SET 'auto.offset.reset' = 'earliest';
+
+CREATE STREAM IF NOT EXISTS a_panel_events (id INT, color VARCHAR, updated_at BIGINT)
+WITH (KAFKA_TOPIC = 'pg.public.a_panel', VALUE_FORMAT = 'JSON');
+
+CREATE TABLE IF NOT EXISTS color_stats AS
+SELECT color, COUNT(*) as total_changes FROM a_panel_events GROUP BY color;
+```
+
+**方法 5: 個別ステートメント投入**
+
+```bash
+# SET文
+curl -X POST http://localhost:8088/ksql \
+  -H "Content-Type: application/vnd.ksql.v1+json" \
+  -d '{"ksql": "SET '\''auto.offset.reset'\'' = '\''earliest'\'';"}'
+
+# STREAM作成
+curl -X POST http://localhost:8088/ksql \
+  -H "Content-Type: application/vnd.ksql.v1+json" \
+  -d '{"ksql": "CREATE STREAM IF NOT EXISTS a_panel_events (id INT, color VARCHAR, updated_at BIGINT) WITH (KAFKA_TOPIC = '\''pg.public.a_panel'\'', VALUE_FORMAT = '\''JSON'\'');"}'
+```
+
+### 動作確認
+
+```bash
+# PostgreSQLでa_panelを更新
+docker compose exec pg psql -U postgres -d demo -c "UPDATE a_panel SET color = 'blue' WHERE id = 1;"
+
+# 連鎖的な色変更を確認
+docker compose exec pg psql -U postgres -d demo -c "
+SELECT 'a_panel' as panel, color FROM a_panel WHERE id = 1
+UNION ALL SELECT 'b_panel', color FROM b_panel WHERE id = 1
+UNION ALL SELECT 'c_panel', color FROM c_panel WHERE id = 1
+UNION ALL SELECT 'd_panel', color FROM d_panel WHERE id = 1;"
+
+# Web UIで確認: http://localhost:5173
+```
+
+### トラブルシューティング
+
+**ksqlDB クエリ失敗時:**
+
+```bash
+# ksqlDBログ確認
+docker compose logs ksqldb
+
+# 既存クエリ確認
+docker compose exec ksqldb ksql http://localhost:8088 -e "SHOW STREAMS; SHOW TABLES;"
+```
